@@ -133,3 +133,5 @@ dmypy.json
 .idea/
 /src/full_output.zip
 /config/
+
+*.ini
