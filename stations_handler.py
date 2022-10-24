@@ -8,8 +8,9 @@ import mysqldb
 import request_handler
 import requests
 import gnsscal
-import zipfile
+import gzip
 import shutil
+import zlib
 
 
 def os_dependency_slash() -> str:
@@ -105,14 +106,22 @@ def get_list_stations() -> list:
     return result
 
 
-def extracting_file(file: str) -> None:
-    try:
-        with zipfile.ZipFile(file, 'r') as zip_file:
-            zip_file.extractall(os.path.dirname(file) + os_dependency_slash() + 'tmp_')
-            print(f"Unpacking of the archive has been successfully completed.")
-    except OSError:
-        print(f"Could not open/read file: {file}")
-        exit()
+def uncompress(file):
+    exit_status = os.system("compress -fd " + file)
+
+    if exit_status != 0:
+        print("ERROR: Could not uncompress file " + file + " !!!")
+
+    return exit_status
+
+
+def gunzip(file):
+    exit_status = os.system('gunzip -f ' + file)
+
+    if exit_status != 0:
+        print("ERROR: Could not gunzip file " + file + " !!!")
+
+    return exit_status
 
 
 def upd_coordinates() -> None:
@@ -120,7 +129,17 @@ def upd_coordinates() -> None:
     url_file = f"https://cddis.nasa.gov/archive/gnss/products/{gps_week[0]}" \
                f"/igs{epoch.strftime('%Y')[2:]}P{gps_week[0]}{gps_week[1]}.snx.Z"
     current_file = download(url_file)
-    extracting_file(current_file)
+
+    if current_file[-2:] == "gz":
+        gunzip(current_file)
+        # self.snxFilePath = self.snxFilePath[0:-3]
+        # wasZipped = True
+
+        # check for unix compression
+    elif current_file[-1:] == "Z":
+        uncompress(current_file)
+        # self.snxFilePath = self.snxFilePath[0:-2]
+        # wasCompressed = True
 
     # удаления tmp_ каталога
     shutil.rmtree(os.path.dirname(current_file) + os_dependency_slash() + 'tmp_', ignore_errors=True)
