@@ -58,7 +58,7 @@ class RequestHandler:
         return requestsdb.execute_read_query(self.connection, select_station_data_query)
 
     # Section for working with the station_tb table
-    def select_station_data(self, station_id: str, dt: datetime) -> list:
+    def select_station_data(self, station_id: str) -> list:
         """
         Getting records from station_tb for a specific station ID and for a given date
         
@@ -66,18 +66,15 @@ class RequestHandler:
         ----------
         station_id : str
             Station identifier (station name)
-        dt : datetime
-            The epoch of obtaining the coordinates of the station
 
         Returns
         -------
         list()
             A list of records from the database
         """
-        dt_to_str = dt.strftime("%Y-%m-%d %H:%M:%S")
         select_station_data_query = f"SELECT * " \
                                     f"FROM odtssw_paf.station_tb " \
-                                    f"WHERE station_id='{station_id}' AND date='{dt_to_str}'; "
+                                    f"WHERE station_id='{station_id}'; "
         return requestsdb.execute_read_query(self.connection, select_station_data_query)
 
     def insert_station_data(self, data: Type[Coordinates]) -> None:
@@ -128,7 +125,7 @@ class RequestHandler:
         delete_stations_query = f"DELETE FROM odtssw_paf.station_tb;"
         requestsdb.execute_write_query(self.connection, delete_stations_query)
 
-    def update_station_data(self, station_id: str, dt: datetime, data: Type[Coordinates]) -> None:
+    def update_station_data(self, station_id: str, data: Type[Coordinates]) -> None:
         """
         Updating records from station_tb for a specific station ID and for a given date
 
@@ -145,21 +142,24 @@ class RequestHandler:
         -------
         None
         """
-        selected_dt_to_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        valid_from = data.dt - datetime.timedelta(days=1)
+        dt_to_str = data.dt.strftime("%Y-%m-%d %H:%M:%S")
+        valid_dt_to_str = valid_from.strftime("%Y-%m-%d %H:%M:%S")
         update_station_data_query = f"UPDATE odtssw_paf.station_tb " \
                                     f"SET latitude='{data.latitude}', longitude='{data.longitude}', " \
-                                    f"x='{data.x}', y='{data.y}', z='{data.z}' " \
-                                    f"WHERE station_id='{station_id}' AND date='{selected_dt_to_str}';"
+                                    f"x='{data.x}', y='{data.y}', z='{data.z}',  date='{dt_to_str}', " \
+                                    f"validFrom='{valid_dt_to_str}'" \
+                                    f"WHERE station_id='{station_id}';"
         requestsdb.execute_write_query(self.connection, update_station_data_query)
 
     # Section for working with the scenario_station_tb table
-    def insert_station(self, scenario_id: int, station_id: str, user_id: int = 1, station_config_tb: int = 1) -> None:
+    def insert_station(self, scenario_id: str, station_id: str, user_id: int = 1, station_config_tb: int = 1) -> None:
         """
         Inserting a station into a table
 
         Parameters
         ----------
-        scenario_id : int
+        scenario_id : str
             Scenario ID for which you want to remove stations from the table
         station_id
             Station ID (name of the station)
@@ -196,13 +196,13 @@ class RequestHandler:
         requestsdb.execute_write_query(self.connection, delete_stations_query)
 
     # Section for working with the scenario_tb table
-    def select_scenario(self, scenario_id: int) -> list:
+    def select_scenario(self, scenario_id: str) -> list:
         """
         Getting a record from scenario_tb for a specific scenario ID
 
         Parameters
         ----------
-        scenario_id : int
+        scenario_id : str
            Scenario identifier
 
         Returns

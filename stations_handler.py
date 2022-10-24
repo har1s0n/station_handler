@@ -8,9 +8,8 @@ import mysqldb
 import request_handler
 import requests
 import gnsscal
-import gzip
-import shutil
-import zlib
+import re
+import math
 
 
 def os_dependency_slash() -> str:
@@ -106,22 +105,122 @@ def get_list_stations() -> list:
     return result
 
 
-def uncompress(file):
-    exit_status = os.system("compress -fd " + file)
-
-    if exit_status != 0:
-        print("ERROR: Could not uncompress file " + file + " !!!")
-
-    return exit_status
-
-
 def gunzip(file):
     exit_status = os.system('gunzip -f ' + file)
 
     if exit_status != 0:
-        print("ERROR: Could not gunzip file " + file + " !!!")
+        print(f"ERROR: Could not gunzip file {file}!")
 
     return exit_status
+
+
+def parse(file: str) -> dict:
+    result = dict()
+    in_solution_estimate_section = False
+    try:
+        with open(file, 'r') as f:
+            start_solution_estimate_pattern = re.compile('^\+SOLUTION/ESTIMATE.*')
+            end_solution_estimate_pattern = re.compile('^\-SOLUTION\/ESTIMATE.*')
+            station_coordinate_pattern = re.compile(
+                '^\s+\d+\s+STA(\w)\s+(\w+)\s+(\w).*\d+\s+(-?[\d+]?\.\d+[Ee][+-]?\d+)\s+(-?[\d+]?\.\d+[Ee][+-]?\d+)$')
+            for line in f:
+                start_solution_estimate_match = start_solution_estimate_pattern.findall(line)
+                end_solution_estimate_match = end_solution_estimate_pattern.findall(line)
+
+                if start_solution_estimate_match:
+                    in_solution_estimate_section = True
+                    continue
+                elif end_solution_estimate_match:
+                    in_solution_estimate_section = False
+                    break
+
+                if in_solution_estimate_section:
+                    station_coordinate_match = station_coordinate_pattern.findall(line)
+                    if station_coordinate_match and stations.count(station_coordinate_match[0][1].lower()):
+                        if not station_coordinate_match[0][1].lower() in result.keys():
+                            coord_data = request_handler.Coordinates()
+                            coord_data.name = station_coordinate_match[0][1].lower()
+                            coord_data.dt = epoch
+                            result[station_coordinate_match[0][1].lower()] = coord_data
+                        if station_coordinate_match[0][0] == 'X':
+                            result[station_coordinate_match[0][1].lower()].x = float(station_coordinate_match[0][3])
+                        elif station_coordinate_match[0][0] == 'Y':
+                            result[station_coordinate_match[0][1].lower()].y = float(station_coordinate_match[0][3])
+                        else:
+                            result[station_coordinate_match[0][1].lower()].z = float(station_coordinate_match[0][3])
+    except Exception as ex:
+        print(f"Failed with error: {ex}")
+        raise
+    return result
+
+
+def ecef2blh(x: float, y: float, z: float) -> list:
+    PI_180 = math.pi / 180.0
+    # WGS84 座標パラメータ
+    A = 6378137.0
+    ONE_F = 298.257223563
+    B = A * (1.0 - 1.0 / ONE_F)
+    E2 = (1.0 / ONE_F) * (2 - (1.0 / ONE_F))
+    # e^2 = 2 * f - f * f
+    #     = (a^2 - b^2) / a^2
+    ED2 = E2 * A * A / (B * B)  # e'^2= (a^2 - b^2) / b^2
+    try:
+        n = lambda x: A / \
+                      math.sqrt(1.0 - E2 * math.sin(x * PI_180) ** 2)
+        p = math.sqrt(x * x + y * y)
+        theta = math.atan2(z * A, p * B) / PI_180
+        lat = math.atan2(
+            z + ED2 * B * math.sin(theta * PI_180) ** 3,
+            p - E2 * A * math.cos(theta * PI_180) ** 3
+        ) / PI_180
+        lon = math.atan2(y, x) / PI_180
+        ht = (p / math.cos(lat * PI_180)) - n(lat)
+        return [lat, lon, ht]
+    except Exception as e:
+        raise
+
+
+def fill_geocentric_coordinates(data: dict) -> None:
+    for value in data.values():
+        blh = ecef2blh(value.x, value.y, value.z)
+        value.latitude = blh[0]
+        value.longitude = blh[1]
+        value.height = blh[2]
+
+
+def check_station_id() -> bool:
+    if len(scenario_id) == 0:
+        print(f"Verification error scenario_id. "
+              f"You must specify the scenario_id in config.ini")
+        return False
+    selected_scenario_tb = handler.select_scenario(scenario_id)
+    if len(selected_scenario_tb) == 0:
+        print(f"Verification error scenario_id. "
+              f"Check the correctness of the specified.")
+        return False
+    return True
+
+
+def updating_list_stations(set_stations: set) -> None:
+    if not check_station_id():
+        return
+    handler.delete_stations(scenario_id)
+    for station in set_stations:
+        handler.insert_station(scenario_id, station)
+
+
+def sending_data_db(data: dict) -> None:
+    set_stations = set()
+    for key in data.keys():
+        set_stations.add(key)
+        selected_station_data = handler.select_station_data(key)
+        if len(selected_station_data) == 0:
+            # insert
+            handler.insert_station_data(data[key])
+        else:
+            # update
+            handler.update_station_data(key, data[key])
+    updating_list_stations(set_stations)
 
 
 def upd_coordinates() -> None:
@@ -129,20 +228,16 @@ def upd_coordinates() -> None:
     url_file = f"https://cddis.nasa.gov/archive/gnss/products/{gps_week[0]}" \
                f"/igs{epoch.strftime('%Y')[2:]}P{gps_week[0]}{gps_week[1]}.snx.Z"
     current_file = download(url_file)
+    gunzip(current_file)
 
-    if current_file[-2:] == "gz":
-        gunzip(current_file)
-        # self.snxFilePath = self.snxFilePath[0:-3]
-        # wasZipped = True
+    result_parse = parse(os.path.basename(current_file)[:-2])
+    fill_geocentric_coordinates(result_parse)
 
-        # check for unix compression
-    elif current_file[-1:] == "Z":
-        uncompress(current_file)
-        # self.snxFilePath = self.snxFilePath[0:-2]
-        # wasCompressed = True
+    # отправка данных в БД odtssw_paf
+    sending_data_db(result_parse)
 
     # удаления tmp_ каталога
-    shutil.rmtree(os.path.dirname(current_file) + os_dependency_slash() + 'tmp_', ignore_errors=True)
+    os.remove(current_file[:-2])
 
 
 if __name__ == '__main__':
@@ -183,21 +278,8 @@ if __name__ == '__main__':
     session = SessionWithHeaderRedirection(cddis_username, cddis_password)
     epoch = get_calculation_epoch() - timedelta(days=1)
 
-    # Закрыть подключение к БД
-    # database.close_connection()
-
-    # if len(date.split('.')) == 3:
-    #     try:
-    #         datetime.datetime.strptime(date, '%Y.%m.%d')
-    #
-    #     except Exception as e:
-    #         print('Invalid date format.', e)
-
     stations = get_list_stations()
     upd_coordinates()
-
-    # отправка данных в БД odtssw_paf
-    # sending_data_database(parsed_data)
 
     # Закрыть подключение к БД
     database.close_connection()
